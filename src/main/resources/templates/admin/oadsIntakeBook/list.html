@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org" xmlns:sec="http://www.pollix.at/thymeleaf/shiro">
+<head>
+    <th:block th:include="include :: header('牌匾更换名册·区局收讫')"/>
+</head>
+<body class="pear-container">
+<div class="layui-card">
+    <div class="layui-card-body">
+        <blockquote class="layui-elem-quote">
+            一次报送一册，一册一次交完整，不接零散逐行；四步连着做完（点行数→验数据→定去向→出回执），中间没有人工兜底。<br>
+            单册行数上限只认本册抬头那一格：空着、写成负数或大得没边的，一律按 <b th:text="${defaultRowLimit}">200</b> 认。
+        </blockquote>
+    </div>
+</div>
+
+<div class="layui-card">
+    <div class="layui-card-body">
+        <form class="layui-form" action="">
+            <div class="layui-form-item">
+                <label class="layui-form-label">册号</label>
+                <div class="layui-input-inline"><input type="text" id="f-bookNo" class="layui-input"></div>
+                <label class="layui-form-label">批次码</label>
+                <div class="layui-input-inline"><input type="text" id="f-batchNo" class="layui-input"></div>
+                <label class="layui-form-label">季度</label>
+                <div class="layui-input-inline" style="width:110px;"><input type="text" id="f-quarter" placeholder="如2026Q4" class="layui-input"></div>
+                <label class="layui-form-label">通道</label>
+                <div class="layui-input-inline" style="width:130px;">
+                    <select id="f-channel">
+                        <option value="DISTRICT">区级报送</option>
+                        <option value="CITY">市级复核</option>
+                    </select>
+                </div>
+                <label class="layui-form-label">抬头上限</label>
+                <div class="layui-input-inline" style="width:110px;"><input type="text" id="f-limit" placeholder="空=200" class="layui-input"></div>
+            </div>
+            <div class="layui-form-item">
+                <label class="layui-form-label">整册行 JSON</label>
+                <div class="layui-input-block">
+                    <textarea id="f-rows" class="layui-textarea" style="height:150px;"
+placeholder='[{"rowNo":1,"spotCode":"SP0000001","boardName":"版面名","roadCode":"DU00","qtyText":"10","chkText":"8","photoNo":"P-1"}]'></textarea>
+                </div>
+            </div>
+            <div class="layui-form-item">
+                <div class="layui-input-block">
+                    <button shiro:hasPermission="oads:oadsIntakeBook:receive" type="button" class="pear-btn pear-btn-primary" id="btn-receive">
+                        <i class="layui-icon layui-icon-ok"></i> 整册交收（四步连着做完）
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="layui-card" id="receipt-card" style="display:none;">
+    <div class="layui-card-body">
+        <blockquote class="layui-elem-quote layui-quote-nm">
+            册号 <b id="r-bookNo"></b>｜批次 <b id="r-batchNo"></b>｜通道 <span id="r-channel"></span>｜情形 <span id="r-status"></span>
+            <span id="r-resubmit" class="layui-badge layui-bg-orange" style="display:none;">重投另登·不入账（回执以首收册为准）</span><br>
+            回执三数（回库逐行重数）：本册行数 <b id="r-total"></b> ＝ 入库行数 <b id="r-in"></b> ＋ 退回行数 <b id="r-back"></b>
+            <span id="r-balanced" class="layui-badge layui-bg-green">勾稽</span><br>
+            抬头上限：原文『<span id="r-limitRaw"></span>』写定 <span id="r-limit"></span>；
+            进门物理行数 <span id="r-physical"></span>（同一处点位写两行也数两行、落两条）
+        </blockquote>
+        <blockquote class="layui-elem-quote layui-quote-nm" id="r-note"></blockquote>
+        <table class="layui-table" id="r-table" lay-size="sm">
+            <thead><tr>
+                <th>行次</th><th>点位编码</th><th>结论</th><th>退回理由（一句句可回查）</th>
+                <th>待核交代</th><th>主档版面名</th><th>主档路段</th><th>名称出入</th><th>路段出入</th><th>缺照</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</div>
+
+<div class="layui-card">
+    <div class="layui-card-body">
+        <div class="layui-form-item">
+            <label class="layui-form-label">回查册号</label>
+            <div class="layui-input-inline"><input type="text" id="q-bookNo" class="layui-input"></div>
+            <button shiro:hasPermission="oads:oadsIntakeBook:list" type="button" class="pear-btn pear-btn-normal" id="btn-receipt">回执回查（回库重数）</button>
+            <button shiro:hasPermission="oads:oadsIntakeBook:reconcile" type="button" class="pear-btn pear-btn-warming" id="btn-reconcile">销账/流水对账（以流水为准）</button>
+            <button shiro:hasPermission="oads:oadsIntakeBook:archive" type="button" class="pear-btn" id="btn-history">划入历史层</button>
+            <button shiro:hasPermission="oads:oadsIntakeBook:archive" type="button" class="pear-btn" id="btn-archive">待核满两年归档（仅历史册）</button>
+        </div>
+    </div>
+</div>
+
+<th:block th:include="include :: footer"/>
+<script>
+    layui.use(['form', 'jquery', 'layer'], function () {
+        let $ = layui.jquery, layer = layui.layer;
+        let PATH = rootPath + "/oadsIntakeBook/";
+
+        function verdictBadge(v) {
+            if (v === 'PASS') return '<span class="layui-badge layui-bg-green">通过</span>';
+            if (v === 'BACK') return '<span class="layui-badge layui-bg-red">退回</span>';
+            if (v === 'PENDING') return '<span class="layui-badge layui-bg-blue">待核</span>';
+            return v || '';
+        }
+        function yn(b) { return b ? '<span class="layui-badge layui-bg-orange">有出入·以主档为准</span>' : ''; }
+
+        function renderReceipt(d) {
+            $('#receipt-card').show();
+            $('#r-bookNo').text(d.bookNo);
+            $('#r-batchNo').text(d.batchNo);
+            $('#r-channel').text(d.channelName);
+            $('#r-status').text(d.statusText);
+            $('#r-resubmit').toggle(!!d.resubmit);
+            $('#r-total').text(d.totalCount);
+            $('#r-in').text(d.storedCount);
+            $('#r-back').text(d.backCount);
+            $('#r-balanced').toggleClass('layui-bg-green', d.countsBalanced)
+                .toggleClass('layui-bg-red', !d.countsBalanced).text(d.countsBalanced ? '勾稽' : '对不齐');
+            $('#r-limitRaw').text(d.rowLimitRaw == null ? '' : d.rowLimitRaw);
+            $('#r-limit').text(d.rowLimit);
+            $('#r-physical').text(d.physicalCount);
+            $('#r-note').text(d.note || '');
+            let html = '';
+            (d.rowChecks || []).forEach(function (r) {
+                html += '<tr><td>' + r.rowNo + '</td><td>' + (r.spotCode || '（空）') + '</td><td>'
+                    + verdictBadge(r.verdict) + '</td><td>' + (r.backReason || '') + '</td><td>'
+                    + (r.pendingNote || '') + '</td><td>' + (r.masterBoardName || '') + '</td><td>'
+                    + (r.masterRoadCode || '') + '</td><td>' + yn(r.nameMismatch) + '</td><td>'
+                    + yn(r.roadMismatch) + '</td><td></td></tr>';
+            });
+            $('#r-table tbody').html(html || '<tr><td colspan="10">整册超限退回：留头留数不留行（行不逐条落账）</td></tr>');
+            $('#q-bookNo').val(d.bookNo);
+        }
+        function fail(r) { layer.alert(r.msg || r.message || '没办成', {icon: 2, title: '收讫环节交代'}); }
+
+        $('#btn-receive').on('click', function () {
+            let rows;
+            try { rows = JSON.parse($('#f-rows').val() || '[]'); }
+            catch (e) { layer.msg('整册行 JSON 解析不了：' + e.message, {icon: 2}); return; }
+            let body = {
+                bookNo: $('#f-bookNo').val(), batchNo: $('#f-batchNo').val(),
+                quarterCode: $('#f-quarter').val(), channel: $('#f-channel').val(),
+                rowLimitText: $('#f-limit').val(), rows: rows
+            };
+            $.ajax({url: PATH + 'receive', type: 'post', contentType: 'application/json', data: JSON.stringify(body),
+                success: function (r) { if (r.code === 200) { renderReceipt(r.data); } else { fail(r); } }});
+        });
+
+        $('#btn-receipt').on('click', function () {
+            $.get(PATH + 'receipt', {bookNo: $('#q-bookNo').val()},
+                function (r) { if (r.code === 200) { renderReceipt(r.data); } else { fail(r); } });
+        });
+
+        $('#btn-reconcile').on('click', function () {
+            $.post(PATH + 'reconcile', {bookNo: $('#q-bookNo').val()}, function (r) {
+                if (r.code !== 200) { fail(r); return; }
+                let d = r.data, msg = d.note + '\n销账：' + d.ledgerTotal + '=' + d.ledgerIn + '+' + d.ledgerBack
+                    + '\n流水重数：' + d.journalTotal + '=' + d.journalIn + '+' + d.journalBack;
+                if (d.rowDrafts && d.rowDrafts.length) {
+                    msg += '\n结论按流水纠回的行：\n' + d.rowDrafts.map(function (x) {
+                        return '第' + x.rowNo + '行 ' + x.spotCode + '：' + x.mismatchNote;
+                    }).join('\n');
+                }
+                layer.alert(msg, {title: '对账结果（账实差以流水为准，纠账归收讫环节认）'});
+            });
+        });
+
+        $('#btn-history').on('click', function () {
+            $.post(PATH + 'markHistory', {bookNo: $('#q-bookNo').val()},
+                function (r) { r.code === 200 ? layer.msg(r.msg, {icon: 1}) : fail(r); });
+        });
+
+        $('#btn-archive').on('click', function () {
+            $.post(PATH + 'archive', {}, function (r) {
+                if (r.code !== 200) { fail(r); return; }
+                let d = r.data, msg = d.note + '\n转卷行：\n'
+                    + d.archivedRows.map(function (x) { return x.bookNo + ' 第' + x.rowNo + '行 ' + x.spotCode + '（自' + x.pendingSince + '待核）'; }).join('\n')
+                    + '\n现行册跳过（新册走不到两年规矩面前）：' + d.skippedCurrent.length + ' 行';
+                layer.alert(msg, {title: '待核满两年度归档（存量一条不减）'});
+            });
+        });
+    });
+</script>
+</body>
+</html>
